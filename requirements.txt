@@ -1,0 +1,9 @@
+# damage_reporter_step_by_step/requirements.txt
+fastapi
+uvicorn[standard]
+sqlalchemy
+psycopg2-binary  # Untuk PostgreSQL. Ganti jika menggunakan DB lain
+alembic
+pydantic[email]
+PyYAML
+python-multipart # Untuk unggahan file

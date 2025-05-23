@@ -1,0 +1,6 @@
+# damage_reporter_step_by_step/config.yaml
+database:
+  url: "sqlite:///./damage_app_sqlite.db" # Path ke file database SQLite
+
+uploads:
+  directory: "media_uploads"
