@@ -5,10 +5,8 @@ from typing import Optional, List
 
 # Impor repositori, skema Pydantic, dan model SQLAlchemy
 from ..repositories.report_repository import ReportRepository
-from .. import (
-    schemas,
-)  # Ini akan menyediakan schemas.ReportCreate, schemas.ReportResponse, dll.
-from .. import models_db  # Ini akan menyediakan models_db.Report untuk tipe return
+from ..schemas.report_schema import *  # Ini akan menyediakan schemas.ReportCreate, schemas.ReportResponse, dll.
+from ..models.report_model import *  # Ini akan menyediakan models_db.Report untuk tipe return
 from ..core.database import get_db_session  # Dependency untuk mendapatkan sesi DB
 
 
@@ -21,8 +19,8 @@ class ReportService:
         self.report_repo = ReportRepository(db=db)
 
     async def create_report(
-        self, report_data: schemas.ReportCreate, photo_file: Optional[UploadFile] = None
-    ) -> models_db.Report:  # Mengembalikan model SQLAlchemy
+        self, report_data: ReportCreate, photo_file: Optional[UploadFile] = None
+    ) -> Report:  # Mengembalikan model SQLAlchemy
         """
         Memproses pembuatan laporan kerusakan baru.
         Menerapkan logika bisnis jika ada, lalu memanggil repositori.
@@ -59,7 +57,7 @@ class ReportService:
 
     def get_report_by_id(
         self, report_id: int
-    ) -> models_db.Report:  # Mengembalikan model SQLAlchemy
+    ) -> Report:  # Mengembalikan model SQLAlchemy
         """
         Mengambil satu laporan berdasarkan ID.
         Melempar HTTPException 404 jika tidak ditemukan.
@@ -76,7 +74,7 @@ class ReportService:
 
     def get_all_reports_paginated(
         self, page: int = 1, limit: int = 10
-    ) -> schemas.ReportPaginatedResponse:
+    ) -> ReportPaginatedResponse:
         """
         Mengambil semua laporan dengan paginasi.
         Mengembalikan objek skema Pydantic ReportPaginatedResponse.
@@ -91,8 +89,8 @@ class ReportService:
             f"Service: Mengambil semua laporan, page={current_page}, limit={items_per_page}"
         )
 
-        db_report_list: List[models_db.Report] = (
-            self.report_repo.get_all_reports_from_db(skip=offset, limit=items_per_page)
+        db_report_list: List[Report] = self.report_repo.get_all_reports_from_db(
+            skip=offset, limit=items_per_page
         )
         total_item_count: int = self.report_repo.count_total_reports_in_db()
 
@@ -105,11 +103,10 @@ class ReportService:
         # Konversi setiap model DB Report ke skema Pydantic ReportResponse
         # Pydantic V2 menggunakan model_validate, V1 menggunakan from_orm
         reports_for_api_response = [
-            schemas.ReportResponse.model_validate(db_report)
-            for db_report in db_report_list
+            ReportResponse.model_validate(db_report) for db_report in db_report_list
         ]
 
-        return schemas.ReportPaginatedResponse(
+        return ReportPaginatedResponse(
             total_reports=total_item_count,
             reports=reports_for_api_response,
             current_page=current_page,
@@ -119,9 +116,9 @@ class ReportService:
     async def update_report(
         self,
         report_id: int,
-        report_update_data: schemas.ReportUpdate,
+        report_update_data: ReportUpdate,
         new_photo_file: Optional[UploadFile] = None,
-    ) -> models_db.Report:  # Mengembalikan model SQLAlchemy yang sudah diupdate
+    ) -> Report:  # Mengembalikan model SQLAlchemy yang sudah diupdate
         """
         Memproses pembaruan laporan yang sudah ada.
         Melempar HTTPException 404 jika laporan tidak ditemukan.

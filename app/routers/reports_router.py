@@ -12,12 +12,7 @@ from fastapi import (
 from typing import Optional, List  # List dari typing
 
 # Impor skema Pydantic yang relevan
-from ..schemas.report_schema import (
-    ReportResponse,
-    ReportCreate,
-    ReportUpdate,
-    ReportPaginatedResponse,
-)
+from ..schemas.report_schema import *
 
 # Impor service yang akan digunakan
 # from ..services.report_service import ReportService
@@ -225,7 +220,7 @@ async def update_report_endpoint(
     try:
         updated_db_report_model = await report_service.update_report(
             report_id=report_id,
-            report_data=report_update_schema,
+            report_update_data=report_update_schema,
             new_photo_file=new_photo,
         )
         return updated_db_report_model  # FastAPI konversi ke response_model

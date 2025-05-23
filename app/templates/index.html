@@ -1,0 +1,640 @@
+{% extends "base.html" %}
+
+{% block title %}Dashboard - Damage Reporting System{% endblock %}
+
+{% block content %}
+{% include "partials/damage_map_tab.html" %}
+
+{% include "partials/manual_upload_tab.html" %}
+
+{% include "partials/reports_list_tab.html" %}
+{% endblock %}
+
+{% block scripts %}
+{{ super() }}
+<script>
+	console.log("Index.html script block loaded.");
+	document.addEventListener('DOMContentLoaded', function () {
+		// --- Variabel Global & Inisialisasi (dari template.html Anda) ---
+		const mapElement = document.getElementById('map');
+		if (!mapElement) {
+			console.error("Map element not found!");
+			return;
+		}
+		const map = L.map(mapElement).setView([-6.2088, 106.8456], 13); // Default view
+		L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+			attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
+		}).addTo(map);
+
+		let damageDataCache = []; // Cache untuk data laporan dari API
+		let currentMapMarkers = [];
+		const itemsPerPage = 5;
+		let currentDamagePageOnMapTab = 1; // Untuk tabel di tab map
+		let currentReportsPageOnReportsTab = 1; // Untuk tabel di tab reports
+
+		const damageListTableBody = document.getElementById('damage-list');
+		const reportsListTableBody = document.getElementById('reports-list');
+
+		const markerModalElement = document.getElementById('marker-modal');
+		const editModalElement = document.getElementById('edit-modal');
+		const deleteModalElement = document.getElementById('delete-modal');
+
+		// Input fields untuk Add Marker Modal
+		const markerLatInput = document.getElementById('marker-lat');
+		const markerLngInput = document.getElementById('marker-lng');
+		const markerDamageTypeSelect = document.getElementById('damage-type');
+		const markerSeveritySelect = document.getElementById('damage-severity');
+		const markerDescriptionTextarea = document.getElementById('damage-description');
+		const markerPhotoInput = document.getElementById('photo-input'); // Untuk file upload di modal
+		const markerCapturedPhotoImg = document.getElementById('captured-photo'); // Untuk hasil kamera di modal
+		const markerCameraResultContainer = document.getElementById('camera-result-container');
+		const markerPhotoUploadArea = document.getElementById('photo-upload-area');
+
+		// Input fields untuk Edit Modal
+		const editLatInput = document.getElementById('edit-lat');
+		const editLngInput = document.getElementById('edit-lng');
+		const editDamageTypeSelect = document.getElementById('edit-damage-type');
+		const editSeveritySelect = document.getElementById('edit-severity');
+		const editDescriptionTextarea = document.getElementById('edit-description');
+		const editStatusSelect = document.getElementById('edit-status');
+		let editingReportId = null; // Untuk menyimpan ID laporan yang sedang diedit
+
+		// Input fields untuk Manual Upload Tab
+		const uploadDamageTypeSelect = document.getElementById('upload-damage-type');
+		const uploadSeveritySelect = document.getElementById('upload-severity');
+		const uploadLatInput = document.getElementById('upload-lat');
+		const uploadLngInput = document.getElementById('upload-lng');
+		const uploadDescriptionTextarea = document.getElementById('upload-description');
+		const manualUploadFileInput = document.getElementById('file-input'); // Input file di tab manual upload
+		const manualUploadFilePreview = document.getElementById('file-preview');
+
+		// Elemen kamera
+		const cameraContainer = document.getElementById('camera-container');
+		const cameraPreviewVideo = document.getElementById('camera-preview'); // <video id="camera-preview">
+		const cameraResultVideo = document.getElementById('camera-result'); // <video id="camera-result"> untuk hasil jepretan (sebelumnya img)
+		let cameraStream = null;
+
+
+		// --- Fungsi Fetch Data dari API ---
+		async function fetchDamageReports(page = 1, limit = itemsPerPage) {
+			console.log(`Workspaceing reports: page=${page}, limit=${limit}`);
+			try {
+				const response = await fetch(`${API_BASE_URL}/reports/?page=${page}&limit=${limit}`);
+				if (!response.ok) {
+					const errorData = await response.json().catch(() => ({ detail: "Failed to fetch reports" }));
+					throw new Error(errorData.detail || `HTTP error! status: ${response.status}`);
+				}
+				const paginatedData = await response.json();
+				console.log("Data diterima dari API:", paginatedData);
+				damageDataCache = paginatedData.reports; // Simpan data laporan
+				return paginatedData; // Kembalikan data paginasi lengkap
+			} catch (error) {
+				console.error("Tidak bisa mengambil laporan kerusakan:", error);
+				showSuccessModal('Error mengambil data laporan: ' + error.message, false);
+				return { reports: [], total_reports: 0, current_page: 1, total_pages: 0 }; // Kembalikan struktur default jika error
+			}
+		}
+
+		// --- Fungsi Render ---
+		function renderAllComponents(paginatedData, activeTab = 'map') {
+			if (!paginatedData || !paginatedData.reports) {
+				console.error("Data paginasi tidak valid untuk render");
+				return;
+			}
+			console.log("Merender semua komponen dengan data:", paginatedData);
+
+			// Clear marker peta lama
+			currentMapMarkers.forEach(marker => map.removeLayer(marker));
+			currentMapMarkers.length = 0;
+
+			// Tambah marker baru ke peta
+			paginatedData.reports.forEach(damage => {
+				const marker = L.marker([damage.lat, damage.lng], {
+					icon: L.divIcon({
+						html: `<div class="damage-marker">${damage.id}</div>`,
+						className: '', iconSize: [20, 20]
+					})
+				}).addTo(map);
+
+				let popupContent = `<b>Damage ID: ${damage.id}</b><br>Tipe: ${damage.damage_type}<br>Severity: ${damage.severity}`;
+				if (damage.photo_url) {
+					const photoDisplayUrl = damage.photo_url.startsWith('http') ? damage.photo_url : `${window.location.origin}${damage.photo_url}`;
+					popupContent += `<br><img src="${photoDisplayUrl}" alt="Photo" class="thumbnail" onclick="showImageModal('${photoDisplayUrl}')">`;
+				}
+				marker.bindPopup(popupContent);
+				currentMapMarkers.push(marker);
+			});
+
+			// Render tabel berdasarkan tab aktif
+			if (activeTab === 'map' || document.getElementById('map-tab').classList.contains('active')) {
+				renderTable(damageListTableBody, paginatedData.reports, 'damage', paginatedData.current_page, paginatedData.total_pages, paginatedData.total_reports);
+			}
+			if (activeTab === 'reports' || document.getElementById('reports-tab').classList.contains('active')) {
+				renderTable(reportsListTableBody, paginatedData.reports, 'reports', paginatedData.current_page, paginatedData.total_pages, paginatedData.total_reports);
+			}
+		}
+
+		function renderTable(tbodyElement, reports, tableType, currentPage, totalPages, totalItems) {
+			tbodyElement.innerHTML = ''; // Bersihkan tabel
+			if (!reports || reports.length === 0) {
+				const tr = tbodyElement.insertRow();
+				const td = tr.insertCell();
+				td.colSpan = tableType === 'damage' ? 7 : 8;
+				td.textContent = 'Tidak ada data laporan.';
+				td.className = 'text-center py-4';
+			}
+
+			reports.forEach(damage => {
+				const row = tbodyElement.insertRow();
+				row.className = 'hover:bg-gray-50';
+				const photoDisplayUrl = damage.photo_url ? (damage.photo_url.startsWith('http') ? damage.photo_url : `${window.location.origin}${damage.photo_url}`) : null;
+
+				if (tableType === 'damage') { // Tabel di Tab Peta
+					row.innerHTML = `
+                            <td class="py-3 px-4">${damage.id}</td>
+                            <td class="py-3 px-4">${damage.lat.toFixed(4)}, ${damage.lng.toFixed(4)}</td>
+                            <td class="py-3 px-4 capitalize">${damage.damage_type}</td>
+                            <td class="py-3 px-4"><span class="px-2 py-1 text-xs rounded-full ${getSeverityClass(damage.severity)}">${damage.severity}</span></td>
+                            <td class="py-3 px-4">${photoDisplayUrl ? `<img src="${photoDisplayUrl}" class="thumbnail" onclick="showImageModal('${photoDisplayUrl}')">` : 'N/A'}</td>
+                            <td class="py-3 px-4">${damage.date_reported}</td>
+                            <td class="py-3 px-4">
+                                <button class="text-blue-500 hover:text-blue-700 mr-2" onclick="window.focusOnMarker(${damage.id})"><i class="fas fa-map-marker-alt"></i></button>
+                                <button class="text-yellow-500 hover:text-yellow-700 mr-2" onclick="window.openEditModal(${damage.id})"><i class="fas fa-edit"></i></button>
+                                <button class="text-red-500 hover:text-red-700" onclick="window.openDeleteModal(${damage.id})"><i class="fas fa-trash"></i></button>
+                            </td>
+                        `;
+				} else { // Tabel di Tab Laporan Utama
+					row.innerHTML = `
+                            <td class="px-6 py-4 whitespace-nowrap text-sm font-medium text-gray-900">#DR-${String(damage.id).padStart(4, '0')}</td>
+                            <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-500">${damage.lat.toFixed(4)}, ${damage.lng.toFixed(4)}</td>
+                            <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-500 capitalize">${damage.damage_type}</td>
+                            <td class="px-6 py-4 whitespace-nowrap"><span class="px-2 py-1 text-xs font-medium rounded-full ${getSeverityClass(damage.severity)}">${damage.severity}</span></td>
+                            <td class="px-6 py-4 whitespace-nowrap">${photoDisplayUrl ? `<img src="${photoDisplayUrl}" class="thumbnail" onclick="showImageModal('${photoDisplayUrl}')">` : 'N/A'}</td>
+                            <td class="px-6 py-4 whitespace-nowrap"><span class="px-2 py-1 text-xs font-medium rounded-full ${getStatusClass(damage.status)}">${damage.status.replace('_', ' ')}</span></td>
+                            <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-500">${damage.date_reported}</td>
+                            <td class="px-6 py-4 whitespace-nowrap text-sm font-medium">
+                                <button class="text-blue-600 hover:text-blue-900 mr-3" onclick="window.openEditModal(${damage.id})">Edit</button>
+                                <button class="text-red-600 hover:text-red-900" onclick="window.openDeleteModal(${damage.id})">Delete</button>
+                            </td>
+                        `;
+				}
+			});
+			// Render Paginasi
+			const paginationElementId = tableType === 'damage' ? 'damage-pagination' : 'reports-pagination';
+			renderPaginationControls(paginationElementId, totalPages, currentPage, tableType);
+			// Update info range
+			if (tableType === 'reports' && document.getElementById('reports-range')) {
+				document.getElementById('reports-range').textContent = `${(currentPage - 1) * itemsPerPage + 1}-${Math.min(currentPage * itemsPerPage, totalItems)}`;
+				document.getElementById('total-reports').textContent = totalItems;
+			}
+		}
+
+		function getSeverityClass(severity) {
+			if (severity === 'low') return 'bg-green-100 text-green-800';
+			if (severity === 'medium') return 'bg-yellow-100 text-yellow-800';
+			if (severity === 'high') return 'bg-orange-100 text-orange-800';
+			if (severity === 'critical') return 'bg-red-100 text-red-800';
+			return 'bg-gray-100 text-gray-800';
+		}
+		function getStatusClass(status) {
+			if (status === 'pending') return 'bg-gray-100 text-gray-800';
+			if (status === 'in_review') return 'bg-blue-100 text-blue-800';
+			if (status === 'in_progress') return 'bg-purple-100 text-purple-800';
+			if (status === 'completed') return 'bg-green-100 text-green-800';
+			return 'bg-gray-100 text-gray-800';
+		}
+
+		function renderPaginationControls(elementId, totalPages, currentPage, tableType) {
+			const paginationContainer = document.getElementById(elementId);
+			paginationContainer.innerHTML = '';
+			if (totalPages <= 1) return;
+
+			for (let i = 1; i <= totalPages; i++) {
+				const pageButton = document.createElement('button');
+				pageButton.textContent = i;
+				if (i === currentPage) pageButton.classList.add('active');
+				pageButton.addEventListener('click', async () => {
+					const newData = await fetchDamageReports(i, itemsPerPage);
+					if (tableType === 'damage') {
+						currentDamagePageOnMapTab = i;
+					} else {
+						currentReportsPageOnReportsTab = i;
+					}
+					renderAllComponents(newData, tableType); // Re-render semua termasuk marker
+				});
+				paginationContainer.appendChild(pageButton);
+			}
+		}
+
+
+		// --- Fungsi CRUD (Interaksi dengan API) ---
+		async function createReport(formData) {
+			try {
+				const response = await fetch(`${API_BASE_URL}/reports/`, {
+					method: 'POST',
+					body: formData // FormData akan otomatis set Content-Type ke multipart/form-data
+				});
+				if (!response.ok) {
+					const errorData = await response.json().catch(() => ({ detail: "Gagal membuat laporan" }));
+					throw new Error(errorData.detail || `HTTP error! status: ${response.status}`);
+				}
+				const newReport = await response.json();
+				showSuccessModal('Laporan berhasil dibuat!');
+				// Muat ulang data untuk tab yang aktif
+				const activeTabElement = document.querySelector('.tab-btn.active-tab');
+				const activeTabName = activeTabElement ? activeTabElement.dataset.tab : 'map';
+				refreshActiveTabData(activeTabName);
+				return newReport;
+			} catch (error) {
+				console.error("Error membuat laporan:", error);
+				showSuccessModal('Gagal membuat laporan: ' + error.message, false);
+			}
+		}
+
+		async function updateReport(reportId, updateData, photoFile = null) {
+			// Untuk PUT, jika ada file, kita harus kirim sebagai FormData.
+			// Jika tidak ada file, kita bisa kirim JSON.
+			// Endpoint PUT kita sekarang menerima Form juga.
+			const formData = new FormData();
+			for (const key in updateData) {
+				if (updateData[key] !== null && updateData[key] !== undefined) {
+					// Pydantic alias 'type' akan menjadi 'damage_type'
+					const formKey = key === 'damage_type' ? 'type_update' : key; // Sesuaikan dengan alias di endpoint PUT
+					formData.append(formKey, updateData[key]);
+				}
+			}
+			if (photoFile) {
+				formData.append('new_photo', photoFile);
+			}
+
+			try {
+				const response = await fetch(`${API_BASE_URL}/reports/${reportId}`, {
+					method: 'PUT',
+					body: formData // Kirim sebagai FormData
+				});
+				if (!response.ok) {
+					const errorData = await response.json().catch(() => ({ detail: "Gagal memperbarui laporan" }));
+					throw new Error(errorData.detail || `HTTP error! status: ${response.status}`);
+				}
+				const updatedReport = await response.json();
+				showSuccessModal('Laporan berhasil diperbarui!');
+				const activeTabElement = document.querySelector('.tab-btn.active-tab');
+				const activeTabName = activeTabElement ? activeTabElement.dataset.tab : 'map';
+				refreshActiveTabData(activeTabName);
+				return updatedReport;
+			} catch (error) {
+				console.error(`Error memperbarui laporan ${reportId}:`, error);
+				showSuccessModal('Gagal memperbarui laporan: ' + error.message, false);
+			}
+		}
+
+		async function deleteReport(reportId) {
+			try {
+				const response = await fetch(`${API_BASE_URL}/reports/${reportId}`, {
+					method: 'DELETE'
+				});
+				if (!response.ok) { // 204 No Content juga response.ok == true
+					if (response.status !== 204) {
+						const errorData = await response.json().catch(() => ({ detail: "Gagal menghapus laporan" }));
+						throw new Error(errorData.detail || `HTTP error! status: ${response.status}`);
+					}
+				}
+				showSuccessModal('Laporan berhasil dihapus!');
+				const activeTabElement = document.querySelector('.tab-btn.active-tab');
+				const activeTabName = activeTabElement ? activeTabElement.dataset.tab : 'map';
+				refreshActiveTabData(activeTabName);
+			} catch (error) {
+				console.error(`Error menghapus laporan ${reportId}:`, error);
+				showSuccessModal('Gagal menghapus laporan: ' + error.message, false);
+			}
+		}
+
+		async function refreshActiveTabData(activeTabName = 'map') {
+			let currentPage = 1;
+			if (activeTabName === 'map') {
+				currentPage = currentDamagePageOnMapTab;
+			} else if (activeTabName === 'reports') {
+				currentPage = currentReportsPageOnReportsTab;
+			}
+			const newData = await fetchDamageReports(currentPage, itemsPerPage);
+			renderAllComponents(newData, activeTabName);
+		}
+
+
+		// --- Event Listeners (dari template.html Anda, dimodifikasi untuk API) ---
+
+		// Tab switching (sudah ada di base.html, tapi ini untuk reload data per tab)
+		document.querySelectorAll('.tab-btn').forEach(btn => {
+			btn.addEventListener('click', async () => {
+				document.querySelectorAll('.tab-btn').forEach(b => { b.classList.remove('active-tab'); b.classList.add('text-gray-600'); });
+				document.querySelectorAll('.tab-content').forEach(c => c.classList.remove('active'));
+
+				btn.classList.add('active-tab');
+				btn.classList.remove('text-gray-600');
+				const tabId = btn.getAttribute('data-tab');
+				document.getElementById(`${tabId}-tab`).classList.add('active');
+
+				// Muat data untuk tab yang baru diaktifkan
+				await refreshActiveTabData(tabId);
+			});
+		});
+
+		// Add Marker Modal
+		let clickMapMarker = null; // Temporary marker di peta
+		document.getElementById('add-marker-btn').addEventListener('click', () => {
+			map.once('click', function (e) { // Gunakan 'once' agar event listener dilepas setelah satu klik
+				if (clickMapMarker) map.removeLayer(clickMapMarker);
+				clickMapMarker = L.marker(e.latlng, {
+					icon: L.divIcon({ html: '<div class="damage-marker" style="background-color: #3b82f6;">+</div>', className: '', iconSize: [20, 20] })
+				}).addTo(map);
+
+				markerLatInput.value = e.latlng.lat.toFixed(6);
+				markerLngInput.value = e.latlng.lng.toFixed(6);
+				markerModalElement.classList.remove('hidden');
+				// Reset form modal
+				document.getElementById('marker-modal').querySelector('form')?.reset();
+				markerCapturedPhotoImg.src = '';
+				markerCameraResultContainer.classList.add('hidden');
+				markerPhotoUploadArea.classList.remove('hidden');
+				markerPhotoInput.value = ''; // Reset file input
+			});
+			showSuccessModal("Klik di peta untuk menandai lokasi kerusakan.", true);
+		});
+
+		document.getElementById('cancel-marker').addEventListener('click', () => {
+			markerModalElement.classList.add('hidden');
+			if (clickMapMarker) map.removeLayer(clickMapMarker);
+			clickMapMarker = null;
+		});
+
+		document.getElementById('marker-modal').querySelector('form').addEventListener('submit', async function (e) {
+			e.preventDefault();
+			const formData = new FormData();
+			formData.append('lat', markerLatInput.value);
+			formData.append('lng', markerLngInput.value);
+			formData.append('type', markerDamageTypeSelect.value); // 'type' akan dihandle aliasnya oleh Pydantic/FastAPI
+			formData.append('severity', markerSeveritySelect.value);
+			formData.append('description', markerDescriptionTextarea.value);
+
+			if (markerPhotoInput.files[0]) {
+				formData.append('photo', markerPhotoInput.files[0]);
+			} else if (markerCapturedPhotoImg.src && markerCapturedPhotoImg.src.startsWith('data:')) {
+				// Konversi data URL ke Blob
+				const blob = await (await fetch(markerCapturedPhotoImg.src)).blob();
+				formData.append('photo', blob, `camera_capture_${Date.now()}.png`);
+			}
+
+			await createReport(formData);
+			markerModalElement.classList.add('hidden');
+			if (clickMapMarker) map.removeLayer(clickMapMarker);
+			clickMapMarker = null;
+		});
+
+		// Photo upload di Add Marker Modal
+		markerPhotoUploadArea.addEventListener('click', () => markerPhotoInput.click());
+		markerPhotoInput.addEventListener('change', function () {
+			if (this.files && this.files[0]) {
+				const reader = new FileReader();
+				reader.onload = (e) => {
+					markerCapturedPhotoImg.src = e.target.result;
+					markerCameraResultContainer.classList.remove('hidden');
+					markerPhotoUploadArea.classList.add('hidden');
+				};
+				reader.readAsDataURL(this.files[0]);
+			}
+		});
+
+
+		// Edit Modal
+		window.openEditModal = async (reportId) => {
+			try {
+				// Ambil data laporan terbaru dari API
+				const response = await fetch(`${API_BASE_URL}/reports/${reportId}`);
+				if (!response.ok) throw new Error("Gagal mengambil data laporan untuk diedit.");
+				const report = await response.json();
+
+				editingReportId = report.id;
+				editLatInput.value = report.lat;
+				editLngInput.value = report.lng;
+				editDamageTypeSelect.value = report.damage_type; // Gunakan field asli dari API
+				editSeveritySelect.value = report.severity;
+				editDescriptionTextarea.value = report.description || '';
+				editStatusSelect.value = report.status;
+				// Untuk edit foto, mungkin perlu UI yang lebih kompleks atau serahkan ke tombol "upload new photo"
+				editModalElement.classList.remove('hidden');
+			} catch (error) {
+				console.error("Error membuka edit modal:", error);
+				showSuccessModal("Gagal memuat data untuk diedit: " + error.message, false);
+			}
+		};
+
+		document.getElementById('cancel-edit').addEventListener('click', () => {
+			editModalElement.classList.add('hidden');
+			editingReportId = null;
+		});
+
+		document.getElementById('edit-modal').querySelector('form').addEventListener('submit', async function (e) {
+			e.preventDefault();
+			if (editingReportId === null) return;
+
+			const updatePayload = { // Ini adalah objek ReportUpdate Pydantic
+				lat: parseFloat(editLatInput.value) || null,
+				lng: parseFloat(editLngInput.value) || null,
+				damage_type: editDamageTypeSelect.value || null, // Pydantic akan handle alias 'type'
+				severity: editSeveritySelect.value || null,
+				description: editDescriptionTextarea.value || null,
+				status: editStatusSelect.value || null
+			};
+			// Hapus field null agar tidak terkirim dan menimpa nilai yang ada dengan null
+			Object.keys(updatePayload).forEach(key => {
+				if (updatePayload[key] === null || updatePayload[key] === '') {
+					delete updatePayload[key];
+				}
+			});
+			// Untuk update foto, kita akan menggunakan parameter 'new_photo' di endpoint PUT
+			// Jika ada input file terpisah untuk edit foto, ambil dari sana.
+			// Untuk sekarang, kita asumsikan update foto dilakukan via field File terpisah di PUT.
+
+			await updateReport(editingReportId, updatePayload /*, newPhotoFile jika ada */);
+			editModalElement.classList.add('hidden');
+			editingReportId = null;
+		});
+
+		// Delete Modal
+		let reportIdToDelete = null;
+		window.openDeleteModal = (reportId) => {
+			reportIdToDelete = reportId;
+			deleteModalElement.classList.remove('hidden');
+		};
+		document.getElementById('cancel-delete').addEventListener('click', () => {
+			deleteModalElement.classList.add('hidden');
+			reportIdToDelete = null;
+		});
+		document.getElementById('confirm-delete').addEventListener('click', async () => {
+			if (reportIdToDelete === null) return;
+			await deleteReport(reportIdToDelete);
+			deleteModalElement.classList.add('hidden');
+			reportIdToDelete = null;
+		});
+
+		// Manual Upload Tab Form
+		document.getElementById('upload-form').addEventListener('submit', async function (e) {
+			e.preventDefault();
+			const formData = new FormData();
+			formData.append('lat', uploadLatInput.value);
+			formData.append('lng', uploadLngInput.value);
+			formData.append('type', uploadDamageTypeSelect.value);
+			formData.append('severity', uploadSeveritySelect.value);
+			formData.append('description', uploadDescriptionTextarea.value);
+			if (manualUploadFileInput.files[0]) {
+				formData.append('photo', manualUploadFileInput.files[0]);
+			}
+
+			if (!uploadDamageTypeSelect.value) { showSuccessModal('Pilih jenis kerusakan.', false); return; }
+			if (!uploadLatInput.value || !uploadLngInput.value) { showSuccessModal('Koordinat wajib diisi.', false); return; }
+
+			await createReport(formData);
+			this.reset(); // Reset form
+			manualUploadFilePreview.innerHTML = ''; // Bersihkan preview file
+		});
+
+		// File input di Manual Upload Tab
+		const manualUploadArea = document.getElementById('file-upload-area');
+		manualUploadArea.addEventListener('click', () => manualUploadFileInput.click());
+		// (Tambahkan event listener untuk drag & drop, dan file preview jika perlu, mirip handleFiles di template asli Anda)
+		manualUploadFileInput.addEventListener('change', function () {
+			manualUploadFilePreview.innerHTML = ''; // Clear previous previews
+			if (this.files && this.files.length > 0) {
+				for (const file of this.files) {
+					const p = document.createElement('p');
+					p.textContent = file.name;
+					manualUploadFilePreview.appendChild(p);
+				}
+			}
+		});
+		document.getElementById('get-location-btn').addEventListener('click', () => {
+			if (navigator.geolocation) {
+				navigator.geolocation.getCurrentPosition(
+					pos => { uploadLatInput.value = pos.coords.latitude.toFixed(6); uploadLngInput.value = pos.coords.longitude.toFixed(6); },
+					err => { showSuccessModal('Gagal mendapatkan lokasi: ' + err.message, false); }
+				);
+			} else { showSuccessModal('Geolocation tidak didukung browser ini.', false); }
+		});
+
+
+		// Fungsi fokus marker di peta
+		window.focusOnMarker = (reportId) => {
+			const report = damageDataCache.find(d => d.id === reportId);
+			if (report) {
+				map.setView([report.lat, report.lng], 16); // Zoom lebih dekat
+				// Cari marker yang sesuai untuk dibuka pop-upnya (agak rumit jika marker dibuat ulang terus)
+				// Cara sederhana: buka popup marker terakhir yang cocok dengan ID jika ada
+				// Atau, loop currentMapMarkers, cari yang lat/lng-nya cocok
+				currentMapMarkers.forEach(m => {
+					const markerLatLng = m.getLatLng();
+					if (markerLatLng.lat === report.lat && markerLatLng.lng === report.lng) {
+						m.openPopup();
+					}
+				});
+			}
+		};
+
+		// --- Logika Kamera (dari template.html Anda, disesuaikan) ---
+		const useCameraBtn = document.getElementById('use-camera-btn');
+		const takePhotoBtnCamera = document.getElementById('take-photo-btn'); // Tombol di dalam area kamera
+		const cancelCameraBtnCamera = document.getElementById('cancel-camera-btn'); // Tombol di dalam area kamera
+
+		if (useCameraBtn) {
+			useCameraBtn.addEventListener('click', async () => {
+				try {
+					document.getElementById('map-tab').querySelector('#map').classList.add('hidden'); // Sembunyikan peta di tab map
+					cameraContainer.classList.remove('hidden');
+					cameraPreviewVideo.style.display = 'block';
+					cameraResultVideo.style.display = 'none'; // Sembunyikan hasil video/gambar awal
+
+					cameraStream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'environment' }, audio: false });
+					cameraPreviewVideo.srcObject = cameraStream;
+					// cameraPreviewVideo.play(); // autoplay sudah ada di tag video
+				} catch (err) {
+					console.error('Error mengakses kamera:', err);
+					showSuccessModal('Tidak bisa mengakses kamera: ' + err.message, false);
+					cameraContainer.classList.add('hidden');
+					document.getElementById('map-tab').querySelector('#map').classList.remove('hidden');
+				}
+			});
+		}
+
+		if (takePhotoBtnCamera) {
+			takePhotoBtnCamera.addEventListener('click', () => {
+				if (!cameraStream || !cameraPreviewVideo.srcObject) {
+					showSuccessModal("Kamera belum aktif.", false);
+					return;
+				}
+				const canvas = document.createElement('canvas');
+				canvas.width = cameraPreviewVideo.videoWidth;
+				canvas.height = cameraPreviewVideo.videoHeight;
+				const ctx = canvas.getContext('2d');
+				ctx.drawImage(cameraPreviewVideo, 0, 0, canvas.width, canvas.height);
+
+				const imageDataUrl = canvas.toDataURL('image/png');
+
+				// Hentikan stream kamera setelah foto diambil
+				if (cameraStream) {
+					cameraStream.getTracks().forEach(track => track.stop());
+					cameraStream = null;
+					cameraPreviewVideo.srcObject = null; // Hapus stream dari elemen video
+				}
+				cameraPreviewVideo.style.display = 'none'; // Sembunyikan preview
+				cameraContainer.classList.add('hidden'); // Sembunyikan kontrol kamera
+				document.getElementById('map-tab').querySelector('#map').classList.remove('hidden'); // Tampilkan peta kembali
+
+				// Masukkan hasil foto ke modal penambahan marker
+				markerCapturedPhotoImg.src = imageDataUrl;
+				markerCameraResultContainer.classList.remove('hidden');
+				markerPhotoUploadArea.classList.add('hidden');
+				markerPhotoInput.value = ''; // Kosongkan file input jika ada
+
+				// Buka modal marker (jika belum terbuka) atau biarkan user klik di peta dulu
+				// Untuk alur ini, kita asumsikan user sudah klik peta atau akan klik peta
+				if (!markerModalElement.classList.contains('hidden')) {
+					// Modal sudah terbuka, foto siap digunakan
+				} else {
+					// Jika modal belum terbuka, mungkin beri instruksi untuk klik peta
+					showSuccessModal("Foto diambil. Sekarang klik di peta untuk menandai lokasi dan mengisi detail.", true);
+					map.once('click', function (e) {
+						if (clickMapMarker) map.removeLayer(clickMapMarker);
+						clickMapMarker = L.marker(e.latlng, {
+							icon: L.divIcon({ html: '<div class="damage-marker" style="background-color: #3b82f6;">+</div>', className: '', iconSize: [20, 20] })
+						}).addTo(map);
+						markerLatInput.value = e.latlng.lat.toFixed(6);
+						markerLngInput.value = e.latlng.lng.toFixed(6);
+						// Foto sudah ada di markerCapturedPhotoImg
+						markerModalElement.classList.remove('hidden');
+					});
+				}
+			});
+		}
+
+		if (cancelCameraBtnCamera) {
+			cancelCameraBtnCamera.addEventListener('click', () => {
+				if (cameraStream) {
+					cameraStream.getTracks().forEach(track => track.stop());
+					cameraStream = null;
+					cameraPreviewVideo.srcObject = null;
+				}
+				cameraPreviewVideo.style.display = 'none';
+				cameraContainer.classList.add('hidden');
+				document.getElementById('map-tab').querySelector('#map').classList.remove('hidden');
+			});
+		}
+
+		// Muat data awal untuk tab map (yang aktif pertama)
+		async function initialLoad() {
+			const initialData = await fetchDamageReports(currentDamagePageOnMapTab, itemsPerPage);
+			renderAllComponents(initialData, 'map');
+		}
+		initialLoad();
+
+	}); // Akhir dari DOMContentLoaded
+</script>
+{% endblock %}

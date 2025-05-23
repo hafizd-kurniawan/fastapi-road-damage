@@ -1,0 +1,59 @@
+<div id="map-tab" class="tab-content active p-6">
+	<div class="mb-6 flex justify-between items-center">
+		<h2 class="text-xl font-semibold text-gray-800">Damage Location Map</h2>
+		<div class="flex space-x-3">
+			<button id="add-marker-btn"
+				class="bg-blue-500 hover:bg-blue-600 text-white px-4 py-2 rounded-lg flex items-center">
+				<i class="fas fa-plus mr-2"></i> Add Damage Point
+			</button>
+			<button id="use-camera-btn"
+				class="bg-green-500 hover:bg-green-600 text-white px-4 py-2 rounded-lg flex items-center">
+				<i class="fas fa-camera mr-2"></i> Use Camera
+			</button>
+		</div>
+	</div>
+
+	<div id="camera-container" class="hidden mb-4">
+		<video id="camera-preview" autoplay playsinline
+			style="width: 100%; height: 300px; background-color: #000; margin-bottom: 1rem; display: none;"></video>
+		<img id="camera-result-img" style="width: 100%; height: auto; display: none; margin-bottom: 1rem;"
+			alt="Captured photo" />
+		<div class="camera-controls">
+			<button id="take-photo-btn" class="bg-blue-500 hover:bg-blue-600 text-white px-4 py-2 rounded-lg">
+				<i class="fas fa-camera mr-2"></i> Take Photo
+			</button>
+			<button id="cancel-camera-btn" class="bg-gray-500 hover:bg-gray-600 text-white px-4 py-2 rounded-lg">
+				<i class="fas fa-times mr-2"></i> Cancel
+			</button>
+		</div>
+	</div>
+
+	<div id="map" class="mb-6 rounded-lg overflow-hidden" style="height: 500px;">
+	</div>
+
+	<div class="bg-gray-50 p-4 rounded-lg">
+		<h3 class="font-medium text-lg mb-3">Damage Reports (Map View)</h3>
+		<div class="overflow-x-auto">
+			<table class="min-w-full bg-white rounded-lg overflow-hidden">
+				<thead class="bg-gray-100">
+					<tr>
+						<th class="py-3 px-4 text-left">ID</th>
+						<th class="py-3 px-4 text-left">Coordinates</th>
+						<th class="py-3 px-4 text-left">Damage Type</th>
+						<th class="py-3 px-4 text-left">Severity</th>
+						<th class="py-3 px-4 text-left">Photo</th>
+						<th class="py-3 px-4 text-left">Date Reported</th>
+						<th class="py-3 px-4 text-left">Actions</th>
+					</tr>
+				</thead>
+				<tbody id="damage-list" class="divide-y divide-gray-200">
+					<tr>
+						<td colspan="7" class="text-center py-4">Loading reports...</td>
+					</tr>
+				</tbody>
+			</table>
+			<div id="damage-pagination" class="pagination mt-4">
+			</div>
+		</div>
+	</div>
+</div>

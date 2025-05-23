@@ -9,10 +9,11 @@ from pathlib import Path  # Untuk manipulasi path
 import shutil  # Untuk operasi file
 
 # Impor model database (SQLAlchemy) dan skema Pydantic
-from .. import models_db  # Ini akan menyediakan models_db.Report
-from .. import (
-    schemas,
-)  # Ini akan menyediakan schemas.ReportCreate, schemas.ReportUpdate
+# from .. import models_db  # Ini akan menyediakan models_db.Report
+from ..models.report_model import Report, DamageSeverityEnum, ReportStatusEnum
+
+# Ini akan menyediakan schemas.ReportCreate, schemas.ReportUpdate
+from ..schemas.report_schema import *
 
 # Impor direktori upload dari konfigurasi
 from ..core.config import UPLOAD_FILES_DIRECTORY
@@ -26,10 +27,6 @@ class ReportRepository:
         self.db = db
 
     async def _save_photo_to_disk(self, photo: UploadFile) -> Optional[str]:
-        """
-        Internal helper method untuk menyimpan file foto yang diunggah.
-        Mengembalikan path URL relatif jika berhasil, None jika gagal.
-        """
         if not photo or not photo.filename:
             return None
 
@@ -47,16 +44,25 @@ class ReportRepository:
         file_path: Path = UPLOAD_FILES_DIRECTORY / unique_filename
 
         try:
+            # Fallback jika .chunks() tidak ada
+            print("Mencoba menyimpan foto dengan await photo.read() (fallback)")
+            content = await photo.read()  # Baca seluruh file
             with open(file_path, "wb") as buffer:
-                async for chunk in photo.chunks():  # Baca dan tulis per chunk
-                    buffer.write(chunk)
-            await photo.close()  # Tutup stream UploadFile setelah selesai
+                buffer.write(content)  # Tulis konten
+
+            await photo.close()
             print(f"Foto berhasil disimpan: {file_path}")
-            # Kembalikan path URL relatif yang akan digunakan untuk mengakses file
             return f"/uploads/{unique_filename}"
+        except (
+            AttributeError
+        ) as ae:  # Khusus menangkap AttributeError jika .read() juga tidak ada (jarang)
+            print(
+                f"Error atribut UploadFile saat menyimpan foto '{unique_filename}': {ae}"
+            )
+            return None
         except Exception as e:
             print(f"Error saat menyimpan foto '{unique_filename}': {e}")
-            if file_path.exists():  # Hapus file parsial jika penyimpanan gagal
+            if file_path.exists():
                 try:
                     os.remove(file_path)
                 except Exception as remove_e:
@@ -91,9 +97,9 @@ class ReportRepository:
 
     async def create_report_in_db(
         self,
-        report_create_data: schemas.ReportCreate,
+        report_create_data: ReportCreate,
         photo_file: Optional[UploadFile] = None,
-    ) -> models_db.Report:
+    ) -> Report:
         """
         Membuat entri laporan baru di database dan menyimpan foto jika ada.
         """
@@ -111,13 +117,11 @@ class ReportRepository:
         # Jika field di Pydantic Anda adalah "damage_type", maka by_alias tidak diperlukan untuk field itu.
         # Kita asumsikan ReportCreate sudah menggunakan field yang benar (damage_type)
         # atau aliasnya (type) dikonfigurasi dengan benar di Pydantic model.
-        report_dict_for_db = report_create_data.model_dump(
-            by_alias=True
+        report_dict_for_db = (
+            report_create_data.model_dump()
         )  # Gunakan by_alias jika skema menggunakan alias
 
-        db_report_obj = models_db.Report(
-            **report_dict_for_db, photo_url=actual_photo_url
-        )
+        db_report_obj = Report(**report_dict_for_db, photo_url=actual_photo_url)
 
         self.db.add(db_report_obj)
         self.db.commit()
@@ -125,30 +129,24 @@ class ReportRepository:
         print(f"Repo: Laporan baru dibuat di DB dengan ID: {db_report_obj.id}")
         return db_report_obj
 
-    def get_report_by_id_from_db(self, report_id: int) -> Optional[models_db.Report]:
+    def get_report_by_id_from_db(self, report_id: int) -> Optional[Report]:
         """
         Mengambil satu laporan dari database berdasarkan ID.
         """
-        report = (
-            self.db.query(models_db.Report)
-            .filter(models_db.Report.id == report_id)
-            .first()
-        )
+        report = self.db.query(Report).filter(Report.id == report_id).first()
         if report:
             print(f"Repo: Laporan dengan ID {report_id} ditemukan.")
         else:
             print(f"Repo: Laporan dengan ID {report_id} tidak ditemukan.")
         return report
 
-    def get_all_reports_from_db(
-        self, skip: int = 0, limit: int = 10
-    ) -> List[models_db.Report]:
+    def get_all_reports_from_db(self, skip: int = 0, limit: int = 10) -> List[Report]:
         """
         Mengambil daftar laporan dari database dengan paginasi dan pengurutan.
         """
         reports = (
-            self.db.query(models_db.Report)
-            .order_by(desc(models_db.Report.id))
+            self.db.query(Report)
+            .order_by(desc(Report.id))
             .offset(skip)
             .limit(limit)
             .all()
@@ -162,16 +160,16 @@ class ReportRepository:
         """
         Menghitung total jumlah laporan di database.
         """
-        total_count = self.db.query(func.count(models_db.Report.id)).scalar() or 0
+        total_count = self.db.query(func.count(Report.id)).scalar() or 0
         print(f"Repo: Total laporan di DB: {total_count}")
         return total_count
 
     async def update_report_in_db(
         self,
         report_id: int,
-        report_update_data: schemas.ReportUpdate,
+        report_update_data: ReportUpdate,
         new_photo_file: Optional[UploadFile] = None,
-    ) -> Optional[models_db.Report]:
+    ) -> Optional[Report]:
         """
         Memperbarui laporan yang sudah ada di database.
         """
@@ -208,7 +206,7 @@ class ReportRepository:
         print(f"Repo: Laporan dengan ID {report_id} berhasil diupdate.")
         return db_report_obj
 
-    def delete_report_from_db(self, report_id: int) -> Optional[models_db.Report]:
+    def delete_report_from_db(self, report_id: int) -> Optional[Report]:
         """
         Menghapus laporan dari database berdasarkan ID.
         Mengembalikan objek laporan yang dihapus jika berhasil, None jika tidak ditemukan.
